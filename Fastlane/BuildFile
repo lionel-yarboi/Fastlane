@@ -1,0 +1,34 @@
+
+
+# --------- Build lanes ---------
+#
+# Here it could be found all the 
+# lanes related with building stuffs.
+#
+# --------- ************* ---------
+platform :ios do
+  # --------- Build lane: Build and archive ---------
+  #
+  # This lane will build the app and archive it in the proper folder
+  #
+  # --------- ****************************************** --------
+  private_lane :hsbc_beta_build_app_and_package do |options|
+    destination_folder = options[:snapshot] ? "/development" : "/distribution"
+    ENV['OUTPUT_PATH'] = "fastlane-results" << "/package" << destination_folder
+    
+    disable_automatic_code_signing(path: ENV["XCODEPROJ_PATH"])
+
+    gym_config = {}
+    gym_config[:workspace] = ENV['XCWORKSPACE_PATH']
+    gym_config[:configuration] = options[:configuration]
+    gym_config[:scheme] = ENV['SCHEME']
+    gym_config[:output_directory] = ENV['OUTPUT_PATH']
+    gym_config[:export_method] = options[:export_method]
+    gym_config[:include_bitcode] = (options[:export_method] != "development")
+    gym_config[:include_symbols] = true
+    gym_config[:build_path] = ENV['OUTPUT_PATH']
+    gym_config[:output_name] = ENV["SCHEME"]+".ipa"
+
+    gym(gym_config)
+  end
+end

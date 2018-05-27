@@ -1,0 +1,161 @@
+
+# --------- Release lanes ---------
+#
+# Here it could be found all the 
+# lanes related with Release stuffs.
+#
+# --------- ************* ---------
+platform :ios do
+
+  # --------- Create release branch ---------
+  #
+  # This stage will prepare, increment build number, create tag and push tag to Master, then merge back into Develop.
+  #
+  # --------- *************************************** ---------
+  desc 'Create and checkout release branch from develop'
+  desc 'Checkout master, add tag and increment build number'
+  lane :open_release_branch_and_tag do |options|
+    ensure_git_status_clean
+    clean_build_artifacts
+
+    #We will ensure we are in Develop to open a new release branch.
+    ensure_git_branch(branch: "develop")
+
+    #create and checkout release branch
+    release_branch = create_and_checkout_release_branch(release_branch: options[:release_branch])
+
+    #push release branch to master
+    push_to_git_remote(
+        remote: 'origin',
+        local_branch: release_branch,
+        remote_branch: 'master',
+        force: true,
+        tags: false
+    )
+
+    ensure_git_status_clean
+
+    #checkout master and ensure up to date
+    sh('git checkout master')
+    ensure_git_branch(branch: 'master')
+    git_pull
+
+    build_number = increment_build_number
+    commit_version_bump(
+        message: "Version Bump to " + build_number
+    )
+
+    #add tag to release branch
+    UI.important "Adding tag to #{release_branch}."
+    add_git_tag(
+        tag: release_branch,
+        build_number: build_number,
+        force: true,
+        message: 'release tag created for ' + release_branch
+    )
+    release_branch
+  end
+
+  desc 'Publish changelog and release notes to Slack channel'
+  lane :publish_changelog_and_release_notes_to_slack do |options|
+    unless options[:release_version]
+      ENV['RELEASE_BRANCH'] = "No release version provided"
+    end
+
+    last_tag = last_git_tag
+    commit = last_git_commit
+
+    all_changes = changelog_from_git_commits(
+        between: [last_tag, commit[:abbreviated_commit_hash]],
+        pretty: "- (%ae) %s",
+        date_format: "short",
+        match_lightweight_tag: false,
+        merge_commit_filtering: "only_include_merges"
+    )
+
+    slack(message: "We'll shortly be releasing a new version of the app, Download via TestFlight. Release notes for: " + ENV['RELEASE_BRANCH'],
+          channel: 'release_updates',
+          slack_url: ENV['SLACK_TEAM'],
+          username: ENV['SLACK_USERNAME'],
+          payload: {
+              :Release_Notes => all_changes
+          },
+          default_payloads: [],
+          icon_url: ENV['SLACK_ICON_URL'],
+    )
+  end
+
+  # --------- Changelog and Release notes to Slack ---------
+  #
+  # This lane will create release notes of merges since last release and post to slack channel
+  #
+  # --------- ****************************************** --------
+
+  private_lane :merge_branches_into_remote do
+    #push branch and tags to remote master
+    push_to_git_remote(
+        remote: 'origin',
+        local_branch: 'master',
+        remote_branch: 'master',
+        tags: true,
+        force: true
+    )
+
+    ensure_git_status_clean
+
+    #merge branch without tag back into Develop
+    push_to_git_remote(
+        remote: 'origin',
+        local_branch: 'master',
+        remote_branch: 'develop',
+        tags: false,
+        force: true
+    )
+
+    reset_git_repo(
+        exclude: "Fastlane/*.env.*"
+    )
+
+    if git_tag_exists(tag: ENV['RELEASE_BRANCH'])
+      UI.important "You have successfully created a new release branch with name #{ENV['RELEASE_BRANCH']}"
+      rocket
+    else
+      UI.error(ENV['RELEASE_BRANCH'] + 'does not exist please check build')
+      raise 'Release branch does not exist, please check'
+    end
+    delete_release_branch
+  end
+
+
+  private_lane :create_and_checkout_release_branch do |options|
+    release_version = options[:release_branch]
+
+    if release_version.to_s.downcase.include?('v')
+      UI.important 'Thanks you have added the ' + 'v' + 'prefix'
+    else
+      release_version.to_s.prepend("v")
+      UI.important 'Just added the ' + 'v' + ' prefix'
+
+    end
+
+    branch_name = "release/#{release_version}"
+    UI.important "Release version branch name #{branch_name}"
+
+    sh("git checkout -b #{branch_name}")
+    ensure_git_status_clean
+    ensure_git_branch(branch: branch_name)
+    branch_name
+  end
+
+  private_lane :delete_release_branch do |options|
+    if options[:delete_branch]
+      sh("git branch -D #{options[:delete_branch]}")
+      sh("git push origin --delete #{options[:delete_branch]}")
+      UI.important "Release branch #{options[:delete_branch]} deleted"
+    else
+      sh("git branch -D #{ENV['RELEASE_BRANCH']}")
+      sh("git push origin --delete #{ENV['RELEASE_BRANCH']}")
+      UI.important "Release branch #{ENV['RELEASE_BRANCH']} deleted"
+    end
+  end
+end

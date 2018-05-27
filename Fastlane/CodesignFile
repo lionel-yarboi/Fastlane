@@ -1,0 +1,63 @@
+# --------- Codesign lanes ---------
+#
+# Here it could be found all the 
+# lanes related with code sign files.
+#
+# --------- ************* ---------
+platform :ios do
+
+  # --------- Certificate and provisioning ---------
+  #
+  # This lane will check, download and update (If necessary) the certificates
+  # and provisionings to use in the build.
+  # 
+  # Provide the 'type' of the provisioning to use: <development | appstore | adhoc>. By default
+  # 'development' will be used.
+  #
+  # --------- *************************************** ---------
+  lane :hsbc_beta_certificate_and_provisioning do |options|
+    match(username: ENV["MATCH_USER"],
+          team_id: ENV["MATCH_TEAM_ID"],
+          git_url: ENV["MATCH_GIT_URL"],
+          git_branch: ENV["MATCH_GIT_BRANCH"],
+          app_identifier: [ENV['BUNDLE_ID_IOS']],
+          skip_docs: true,
+          force:true,
+          force_for_new_devices: true,
+          shallow_clone: true,
+          type: options[:type])
+
+    ENV['CODESIGN_SPECIFIER'] = ENV["sigh_#{ENV['BUNDLE_ID_IOS']}_#{options[:type]}"]
+  end
+
+	# --------- Installing certificate and provisioning profiles ---------
+	#
+	# Helper lane useful for install the certificates and profiles from remote.
+	# 
+	# Provide the 'all' to install all the certificates. 
+	# Otherwise development will be installed only
+	#
+	# --------- *************************************** ---------
+  lane :install_certificates do |options|
+    types = ["development"]
+    if options[:all]
+      types += ["appstore", "adhoc"]
+    end
+
+    types.each do |type|
+      match(
+          username: ENV["MATCH_USER"],
+          team_id: ENV["MATCH_TEAM_ID"],
+          git_url: ENV["MATCH_GIT_URL"],
+          git_branch: ENV["MATCH_GIT_BRANCH"],
+          app_identifier: [ENV['BUNDLE_ID_IOS']],
+          force:true,
+          force_for_new_devices: true,
+          skip_docs: true,
+          readonly: false,
+          shallow_clone: true,
+          type: type
+      )
+    end
+  end
+end

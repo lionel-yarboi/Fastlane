@@ -1,0 +1,19 @@
+#Hide files if not already hidden
+
+  def self.hide_files_if_not_hidden
+    if !File.file?('.env.default') | ('.env.default.red')
+      puts 'adding . to env files'
+      %x( mv 'env.ci' .env.ci )
+      %x( mv 'env.production' .env.production )
+      %x( mv 'env.staging' .env.staging )
+      %x( mv 'env.qa' .env.qa )
+    end
+  end
+
+  def self.check_if_build_directory_exist_and_delete
+    Dir.chdir(ENV['HOME']) do
+      Dir.glob('Build*').each do |file|
+        File.delete(file)
+      end
+    end
+  end

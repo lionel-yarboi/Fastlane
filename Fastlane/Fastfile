@@ -1,0 +1,295 @@
+fastlane_require 'dotenv/load'
+
+default_platform :ios
+
+import "BuildFile"
+import "ReleaseFile"
+import "CodesignFile"
+import "HelperMethods"
+
+
+# --------- Public lanes ---------
+#
+# Here it could be found all the 
+# All the helper and private lanes shouldn't be used directly.
+#
+# --------- ************* ---------
+
+platform :ios do
+  before_all do
+    check_if_build_directory_exist_and_delete
+    hide_files_if_not_hidden
+    if is_ci?
+      clear_derived_data
+    end
+
+    if ENV["SCHEME"] == 'HSBCBeta'
+      UI.important 'You have loaded HSBCBeta production scheme'
+    elsif ENV["SCHEME"] == 'HSBCBeta-Staging'
+      UI.important 'You have loaded HSBCBeta staging scheme'
+    else ENV["SCHEME"] == 'HSBCBeta-Debug'
+      UI.important 'You have loaded HSBCBeta debug scheme'
+    end
+
+    ENV['FASTLANE_XCODE_LIST_TIMEOUT'] = '600'
+
+    setup_jenkins(set_code_signing_identity: false,
+                  output_directory: 'fastlane-results',
+                  derived_data_path: 'fastlane-results/.derivedData',
+                  result_bundle: false
+    )
+  end
+
+  # --------- Public lane: Develop Distribution ---------
+  #
+  # This lane will build and distribute a development version for 
+  # Hockey App. By default it will distribute only to
+  # "development team" list
+  #
+  # --------- ********************************* ---------
+
+  desc 'Runs unit tests'
+  desc 'Increment build number'
+  desc 'Builds and archives app'
+  desc 'Hockey app distribution'
+  desc 'resets git repo'
+  lane :distribution do |options|
+    options[:tests_kind] = 'Logic'
+    increment_build_number
+    if options[:build_type] == 'adhoc'
+      adhoc_build
+    else
+      development_build
+    end
+    hockey_app_distribution
+  end
+
+
+  desc 'Hockey app distribution groups'
+  lane :hockey_app_distribution do |options|
+    distribution_groups = options[:distribution_groups]
+    unless distribution_groups
+      distribution_groups = 'newdevelopmentteam'
+    end
+
+    case distribution_groups
+      when 'newdevelopmentteam'
+        hsbc_beta_new_distribution(build_environment: options[:build_environment])
+    end
+  end
+
+  lane :debug_test_coverage do |options|
+    case options[:tests_kind]
+      when 'UI'
+        hsbc_beta_ui_test(options)
+      when 'Logic'
+        hsbc_beta_test(options)
+      else
+        UI.important 'There are no tests for the options specified. Available options are UI and Logic'
+      end
+
+      slack(
+          message: 'All tests were passed, well done humans!',
+   	      channel: 'builds',
+   	      slack_url: ENV['SLACK_TEAM'],
+   	      username: ENV['SLACK_USERNAME'],
+   	      payload: {
+              :Tests_type => "#{options[:tests_kind]}",
+              :Job => "#{ENV['BUILD_URL']}",
+              :Commit => "#{ENV['COMMIT_BASE_URL']}#{ENV['GIT_COMMIT']}"
+          },
+   	      default_payloads: [:git_branch, :git_author],
+		      icon_url: ENV['SLACK_ICON_URL'],
+		      success: true
+      )
+  end
+
+  # --------- Public lane: Production create release branch build and archive ---------
+  #
+  # This lane will create release branch, build, test, archive and zip ready for distribution via TestFlight
+  #
+  # --------- ********************************* ---------
+  desc 'Creates release branch'
+  desc 'Runs unit tests'
+  desc 'Builds and archives, then creates zip and moves to build directory'
+  desc 'Merges release branch into master and develop'
+  desc 'Creates changelog and publishes release notes to Slack'
+  lane :production_build_create_release_branch_and_archive_for_test_flight do |options|
+    ENV['RELEASE_BRANCH'] = open_release_branch_and_tag(release_branch: options[:release_branch])
+    hsbc_beta_test
+    development_build(type: 'development')
+    create_zip_and_move_to_build_directory
+    merge_branches_into_remote(release_branch: options[:release_branch])
+    publish_changelog_and_release_notes_to_slack
+  end
+
+
+  # --------- Public lane: Production build and archive ---------
+  #
+  # This lane will build, archive and zip ready for distribution via TestFlight
+  #
+  # --------- ********************************* ---------
+
+  desc 'Runs unit tests'
+  desc 'Builds and archives, then creates zip and moves to build directory'
+  desc 'Creates changelog and publishes release notes to Slack'
+  lane :production_build_archive_and_zip do |options|
+    hsbc_beta_test
+    development_build(type: 'development')
+    create_zip_and_move_to_build_directory
+    publish_changelog_and_release_notes_to_slack(release_branch: options[:release_branch])
+  end
+
+  desc 'Runs unit tests'
+  lane :hsbc_beta_test do
+    clear_derived_data
+    commit = last_git_commit
+    if is_ci
+      branch = ENV['GIT_BRANCH']
+    else
+      branch = git_branch
+    end
+
+    scan(workspace: ENV['XCWORKSPACE_PATH'],
+         devices: ["iPhone 7"],
+         scheme: ENV['SCHEME'],
+         configuration: "Test",
+         output_types: "html,junit",
+         clean: true,
+         code_coverage: true,
+         slack_url: ENV['SLACK_TEAM'],
+         slack_channel: '#iostests',
+         slack_message: "Test results for Build: #{get_build_number}.  Branch:#{branch}, last commit by #{commit[:author]}",
+         output_directory: "fastlane-results/test-reports"
+    )
+    if is_ci
+      xcov(
+           workspace: ENV['XCWORKSPACE_PATH'],
+           scheme: "HSBCBeta",
+           derived_data_path: "fastlane-results/.derivedData",
+           configuration: "Debug",
+           slack_url: ENV['SLACK_TEAM'],
+           slack_channel: '#iostests',
+           only_project_targets: true
+      )
+    end
+  end
+
+  desc 'Builds and archive app'
+  lane :development_build do
+    hsbc_beta_build_and_archive(type: "development",
+                          branch_to_ensure: git_branch)
+  end
+
+  desc 'Builds and archive app'
+  lane :adhoc_build do
+    hsbc_beta_build_and_archive(type: "adhoc",
+                          branch_to_ensure: git_branch)
+  end
+
+  desc 'Creates zip and directory in root'
+  lane :zip_xcarchive do |options|
+    xcarchive_path = options[:path_to_xcarchive]
+
+    unless xcarchive_path
+      archive_name = Dir.glob("*.xcarchive*")
+      xcarchive_path = ENV['OUTPUT_PATH'].to_s
+      xcarchive_path + '/' + archive_name[0].to_s
+    end
+
+    xcarchive_zip = "HSBCBetaProdRED_#{Time.now.strftime("%d_%m_%Y_%H_%M")}.zip"
+
+    zip(
+        path: xcarchive_path.to_s,
+        output_path: xcarchive_zip
+    )
+
+    xcarchive_zip
+  end
+
+  desc 'Creates zip and moves to build directory'
+  lane :create_zip_and_move_to_build_directory do
+    xcarchive_zip = zip_xcarchive
+    build_directory = ENV['HOME']+"/Build #{get_build_number}"
+
+    Dir.mkdir(build_directory) unless File.exists?(build_directory)
+    require 'fileutils'
+    Dir.chdir("..") do
+      FileUtils.mv(xcarchive_zip, build_directory)
+    end
+    notification message:"Build Directory Created" , title:"Build #{get_build_number} created"
+  end
+
+  
+  # --------- Private HockeyApp and Slack lanes ---------
+  #
+  # Slack lanes for all distributions
+  #
+  # --------- ******************** ---------
+
+  private_lane :hsbc_beta_new_distribution do |options|
+    build_environment = options[:build_environment]
+    file_name = 'development'
+    if build_environment == 'adhoc'
+      file_name = 'distribution'
+    end
+
+    commit = last_git_commit
+    author = commit[:author]
+    hash = commit[:commit_hash]
+
+
+    notes = "Branch: #{git_branch}, " + "\n" + " Committed By: #{author}, " + "\n" + "Commit Hash: #{hash}" +  "\n" + 'PLEASE DELETE INSTALLED VERSION OF THE APP, BEFORE CONTINUING TO DOWNLOAD'
+
+    hockey(
+        api_token: ENV['HOCKEY_API_TOKEN'],
+        notes: notes,
+        notify: '1',
+        status: '2',
+        dsym: ENV['DSYM_OUTPUT_PATH'],
+        ipa: "fastlane-results/package/#{file_name}/#{ENV['SCHEME']}.ipa"
+    )
+
+    slack(
+        message: ENV['OUTPUT_PATH'],
+        channel: 'builds',
+        slack_url: ENV['SLACK_TEAM'],
+        success: true
+    )
+  end
+
+  # --------- Private helper lanes ---------
+  #
+  # Helper private lanes.
+  #
+  # --------- ******************** ---------
+
+  private_lane :hsbc_beta_build_and_archive do |options|
+    if is_ci
+      ensure_git_status_clean
+    end
+
+    case options[:type]
+      when "development"
+        export_method = "development"
+        snapshot = true
+
+      when "adhoc"
+        export_method = "ad-hoc"
+        snapshot = false
+      else
+        UI.error "The type #{options[:type]} is not an available type. Must be \"development\", \"adhoc\" or \"appstore\""
+    end
+
+    hsbc_beta_certificate_and_provisioning(options)
+
+    hsbc_beta_build_app_and_package(
+        configuration: ENV['CONFIGURATION'],
+        snapshot: snapshot,
+        export_method: export_method)
+
+    if !is_ci
+      reset_git_repo
+    end
+  end
+end
