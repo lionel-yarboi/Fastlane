@@ -1,7 +1,7 @@
 # --------- Codesign lanes ---------
 #
 # Here it could be found all the 
-# lanes related with code sign files.
+# lanes related with code signing.
 #
 # --------- ************* ---------
 platform :ios do

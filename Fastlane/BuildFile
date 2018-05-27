@@ -3,7 +3,7 @@
 # --------- Build lanes ---------
 #
 # Here it could be found all the 
-# lanes related with building stuffs.
+# lanes related with building.
 #
 # --------- ************* ---------
 platform :ios do

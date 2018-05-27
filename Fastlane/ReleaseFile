@@ -2,7 +2,7 @@
 # --------- Release lanes ---------
 #
 # Here it could be found all the 
-# lanes related with Release stuffs.
+# lanes related with Releases.
 #
 # --------- ************* ---------
 platform :ios do
